@@ -1,21 +1,27 @@
 /**
- * Unit tests for blogController
+ * Unit tests for blogController (Refactored with Service Layer)
+ * File: tests/blogController.test.ts
  */
 
-jest.mock('../src/models/Blog', () => ({
-  __esModule: true,
-  default: {
-    create: jest.fn(),
-    countDocuments: jest.fn(),
-    find: jest.fn(),
-    findById: jest.fn()
-  }
+// --- 1. Setup Mocks ---
+const createBlogMock = jest.fn();
+const getBlogsMock = jest.fn();
+const getBlogByIdMock = jest.fn();
+const updateBlogMock = jest.fn();
+const deleteBlogMock = jest.fn();
+
+// Mock module 
+jest.mock('../src/services/blogService', () => ({
+  BlogService: jest.fn().mockImplementation(() => ({
+    createBlog: createBlogMock,
+    getBlogs: getBlogsMock,
+    getBlogById: getBlogByIdMock,
+    updateBlog: updateBlogMock,
+    deleteBlog: deleteBlogMock,
+  })),
 }));
 
-jest.mock('../src/middlewares/uploader', () => ({
-  removeImage: jest.fn()
-}));
-
+// --- 2. Import Module  ---
 import {
   createBlog,
   getBlogs,
@@ -24,6 +30,9 @@ import {
   deleteBlog,
 } from '../src/controllers/blogController';
 
+import { NotFoundError, ForbiddenError, ValidationError } from '../src/utils/customErrors';
+
+// --- 3. Mock Response Express Helper ---
 const mockResponse = () => {
   const res: any = {};
   res.status = jest.fn().mockReturnValue(res);
@@ -31,186 +40,173 @@ const mockResponse = () => {
   return res;
 };
 
-describe('blogController - createBlog', () => {
-  beforeEach(() => jest.clearAllMocks());
-
-  it('should return 400 when missing fields', async () => {
-    const req: any = { body: {} };
-    const res = mockResponse();
-    await createBlog(req, res);
-    expect(res.status).toHaveBeenCalledWith(400);
+// --- 4. Test Suites ---
+describe('blogController', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
   });
 
-  it('should create blog and return 201', async () => {
-    const Blog = require('../src/models/Blog').default;
-    const mockBlog = { _id: 'b1', title: 't', content: 'c', author: 'u1' };
-    (Blog.create as jest.Mock).mockResolvedValue(mockBlog);
+  describe('createBlog', () => {
+    it('should return 400 on validation error', async () => {
+      // Arrange: Service melempar ValidationError
+      createBlogMock.mockRejectedValue(new ValidationError('Missing fields'));
+      const req: any = { body: {} };
+      const res = mockResponse();
 
-    const req: any = { body: { title: 't', content: 'c' }, userId: 'u1' };
-    const res = mockResponse();
-    await createBlog(req, res);
-    expect(Blog.create).toHaveBeenCalledWith(expect.objectContaining({ title: 't', content: 'c', author: 'u1' }));
-    expect(res.status).toHaveBeenCalledWith(201);
-  });
-});
+      // Act
+      await createBlog(req, res);
 
-describe('blogController - getBlogs', () => {
-  beforeEach(() => jest.clearAllMocks());
-
-  it('should return list with meta', async () => {
-    const Blog = require('../src/models/Blog').default;
-    (Blog.countDocuments as jest.Mock).mockResolvedValue(1);
-    const fakeFind = { populate: jest.fn().mockReturnThis(), sort: jest.fn().mockReturnThis(), skip: jest.fn().mockReturnThis(), limit: jest.fn().mockResolvedValue([{ _id: 'b1' }]) };
-    (Blog.find as jest.Mock).mockReturnValue(fakeFind);
-
-    const req: any = { query: {} };
-    const res = mockResponse();
-    await getBlogs(req, res);
-    expect(res.status).toHaveBeenCalledWith(200);
-    expect(res.json).toHaveBeenCalled();
-  });
-});
-
-describe('blogController - getBlogById', () => {
-  beforeEach(() => jest.clearAllMocks());
-
-  it('should return 404 when not found', async () => {
-    const Blog = require('../src/models/Blog').default;
-    (Blog.findById as jest.Mock).mockReturnValue({
-      populate: jest.fn().mockResolvedValue(null) 
+      // Assert
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
     });
 
-    const req: any = { params: { id: 'no' } };
-    const res = mockResponse();
-    await getBlogById(req, res);
-    expect(res.status).toHaveBeenCalledWith(404);
+    it('should return 201 on success', async () => {
+      // Arrange: Service berhasil membuat blog
+      const createdBlog = { _id: 'b1', title: 'Title', content: 'Content', author: 'u1' };
+      createBlogMock.mockResolvedValue(createdBlog);
+      const req: any = { body: { title: 'Title', content: 'Content' }, userId: 'u1' };
+      const res = mockResponse();
+
+      // Act
+      await createBlog(req, res);
+
+      // Assert
+      expect(createBlogMock).toHaveBeenCalledWith('u1', req.body, undefined); // Verifikasi argumen service
+      expect(res.status).toHaveBeenCalledWith(201);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true, data: createdBlog }));
+    });
   });
 
-  it('should return blog details on success', async () => {
-    const Blog = require('../src/models/Blog').default;
-    const mockBlog = { _id: 'b1', title: 'Test Blog' };
-    (Blog.findById as jest.Mock).mockReturnValue({
-        populate: jest.fn().mockResolvedValue(mockBlog)
-    });
+  describe('getBlogs', () => {
+    it('should return 200 and list of blogs with meta', async () => {
+      const mockResult = {
+        blogs: [{ _id: 'b1', title: 'Blog 1' }],
+        meta: { page: 1, limit: 10, total: 1, totalPages: 1 }
+      };
+      getBlogsMock.mockResolvedValue(mockResult);
+      const req: any = { query: { page: '1', limit: '10' } };
+      const res = mockResponse();
 
-    const req: any = { params: { id: 'b1' } };
-    const res = mockResponse();
-    await getBlogById(req, res);
-    expect(res.status).toHaveBeenCalledWith(200);
+      await getBlogs(req, res);
 
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      expect(getBlogsMock).toHaveBeenCalledWith(1, 10);
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
         success: true,
-        data: mockBlog
-    }));
-  });
-});
-
-describe('blogController - updateBlog', () => {
-  beforeEach(() => jest.clearAllMocks());
-
-  it('should return 404 when not found', async () => {
-    const Blog = require('../src/models/Blog').default;
-    (Blog.findById as jest.Mock).mockResolvedValue(null);
-
-    const req: any = { params: { id: 'no' }, body: {}, userId: 'u1' };
-    const res = mockResponse();
-    await updateBlog(req, res);
-    expect(res.status).toHaveBeenCalledWith(404);
+        data: mockResult.blogs,
+        meta: mockResult.meta
+      }));
+    });
   });
 
-  it('should return 403 when not author', async () => {
-    const Blog = require('../src/models/Blog').default;
-    const mockBlog: any = { _id: 'b1', author: 'other' };
-    (Blog.findById as jest.Mock).mockResolvedValue(mockBlog);
+  describe('getBlogById', () => {
+    it('should return 404 when blog not found', async () => {
+      getBlogByIdMock.mockRejectedValue(new NotFoundError('Blog not found'));
+      const req: any = { params: { id: 'invalid-id' } };
+      const res = mockResponse();
 
-    const req: any = { params: { id: 'b1' }, body: { title: 'new' }, userId: 'u1' };
-    const res = mockResponse();
-    await updateBlog(req, res);
-    expect(res.status).toHaveBeenCalledWith(403);
+      await getBlogById(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(404);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
+    });
+
+    it('should return 200 and blog details on success', async () => {
+      const mockBlog = { _id: 'b1', title: 'My Blog' };
+      getBlogByIdMock.mockResolvedValue(mockBlog);
+      const req: any = { params: { id: 'b1' } };
+      const res = mockResponse();
+
+      await getBlogById(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true, data: mockBlog }));
+    });
   });
 
-  it('should update fields and save on success', async () => {
-    const Blog = require('../src/models/Blog').default;
-    const mockBlog: any = { _id: 'b1', author: 'u1', title: 'old', content: 'old', save: jest.fn().mockResolvedValue(true) };
-    (Blog.findById as jest.Mock).mockResolvedValue(mockBlog);
+  describe('updateBlog', () => {
+    it('should return 404 when blog not found', async () => {
+      updateBlogMock.mockRejectedValue(new NotFoundError('Blog not found'));
+      const req: any = { params: { id: 'no' }, body: {}, userId: 'u1' };
+      const res = mockResponse();
 
-    const req: any = { params: { id: 'b1' }, body: { title: 'new', content: 'new' }, userId: 'u1' };
-    const res = mockResponse();
-    await updateBlog(req, res);
+      await updateBlog(req, res);
 
-    expect(mockBlog.save).toHaveBeenCalled();
-    expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.status).toHaveBeenCalledWith(404);
+    });
+
+    it('should return 403 when user is not author', async () => {
+      updateBlogMock.mockRejectedValue(new ForbiddenError('Unauthorized'));
+      const req: any = { params: { id: 'b1' }, body: {}, userId: 'u2' };
+      const res = mockResponse();
+
+      await updateBlog(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+    });
+
+    it('should return 200 on successful update', async () => {
+      const updatedBlog = { _id: 'b1', title: 'New Title' };
+      updateBlogMock.mockResolvedValue(updatedBlog);
+      const req: any = { params: { id: 'b1' }, body: { title: 'New Title' }, userId: 'u1' };
+      const res = mockResponse();
+
+      await updateBlog(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true, data: updatedBlog }));
+    });
   });
 
-  it('should replace image and call removeImage when file provided', async () => {
-    const Blog = require('../src/models/Blog').default;
-    const mockBlog: any = { _id: 'b1', author: 'u1', imageUrl: '/uploads/old.jpg', save: jest.fn().mockResolvedValue(true) };
-    (Blog.findById as jest.Mock).mockResolvedValue(mockBlog);
+  describe('deleteBlog', () => {
+    it('should return 404 when blog not found', async () => {
+      deleteBlogMock.mockRejectedValue(new NotFoundError('Blog not found'));
+      const req: any = { params: { id: 'no' }, userId: 'u1' };
+      const res = mockResponse();
 
-    const removeImage = require('../src/middlewares/uploader').removeImage as jest.Mock;
+      await deleteBlog(req, res);
 
-    const req: any = { params: { id: 'b1' }, body: {}, userId: 'u1', file: { filename: 'new.jpg' } };
-    const res = mockResponse();
-    await updateBlog(req, res);
+      expect(res.status).toHaveBeenCalledWith(404);
+    });
 
-    expect(removeImage).toHaveBeenCalledWith('/uploads/old.jpg');
-    expect(mockBlog.imageUrl).toEqual('/uploads/new.jpg');
-    expect(mockBlog.save).toHaveBeenCalled();
-    expect(res.status).toHaveBeenCalledWith(200);
+    it('should return 403 when forbidden', async () => {
+      deleteBlogMock.mockRejectedValue(new ForbiddenError('Forbidden'));
+      const req: any = { params: { id: 'b1' }, userId: 'u2' };
+      const res = mockResponse();
+
+      await deleteBlog(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(403);
+    });
+
+    it('should return 200 on successful deletion', async () => {
+      deleteBlogMock.mockResolvedValue(undefined); // Delete biasanya tidak mengembalikan data
+      const req: any = { params: { id: 'b1' }, userId: 'u1' };
+      const res = mockResponse();
+
+      await deleteBlog(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+    });
   });
-});
+  
+  // Optional: Test generic 500 error
+  describe('General Error Handling', () => {
+      it('should return 500 on unexpected errors', async () => {
+          const unexpectedError = new Error('Database exploded');
+          getBlogsMock.mockRejectedValue(unexpectedError);
+          const req: any = { query: {} };
+          const res = mockResponse();
 
-describe('blogController - deleteBlog', () => {
-  beforeEach(() => jest.clearAllMocks());
+          await getBlogs(req, res);
 
-  it('should return 404 when not found', async () => {
-    const Blog = require('../src/models/Blog').default;
-    (Blog.findById as jest.Mock).mockResolvedValue(null);
-
-    const req: any = { params: { id: 'no' }, userId: 'u1' };
-    const res = mockResponse();
-    await deleteBlog(req, res);
-    expect(res.status).toHaveBeenCalledWith(404);
-  });
-
-  it('should return 403 when not author', async () => {
-    const Blog = require('../src/models/Blog').default;
-    const mockBlog: any = { _id: 'b1', author: 'other' };
-    (Blog.findById as jest.Mock).mockResolvedValue(mockBlog);
-
-    const req: any = { params: { id: 'b1' }, userId: 'u1' };
-    const res = mockResponse();
-    await deleteBlog(req, res);
-    expect(res.status).toHaveBeenCalledWith(403);
-  });
-
-  it('should delete blog and remove image when present', async () => {
-    const Blog = require('../src/models/Blog').default;
-    const mockBlog: any = { _id: 'b1', author: 'u1', imageUrl: '/uploads/img.jpg', deleteOne: jest.fn().mockResolvedValue(true) };
-    (Blog.findById as jest.Mock).mockResolvedValue(mockBlog);
-
-    const removeImage = require('../src/middlewares/uploader').removeImage as jest.Mock;
-
-    const req: any = { params: { id: 'b1' }, userId: 'u1' };
-    const res = mockResponse();
-    await deleteBlog(req, res);
-
-    expect(removeImage).toHaveBeenCalledWith('/uploads/img.jpg');
-    expect(mockBlog.deleteOne).toHaveBeenCalled();
-    expect(res.status).toHaveBeenCalledWith(200);
-  });
-});
-
-describe('blogController - error handling (CastError)', () => {
-  beforeEach(() => jest.clearAllMocks());
-
-  it('getBlogById returns 404 for CastError', async () => {
-    const Blog = require('../src/models/Blog').default;
-    (Blog.findById as jest.Mock).mockRejectedValue({ name: 'CastError' });
-
-    const req: any = { params: { id: 'invalid' } };
-    const res = mockResponse();
-    await getBlogById(req, res);
-    expect(res.status).toHaveBeenCalledWith(404);
+          expect(res.status).toHaveBeenCalledWith(500);
+          expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ 
+              success: false, 
+              message: 'Failed to list blogs' // Sesuai dengan pesan default di handleServiceError controller Anda
+          }));
+      });
   });
 });

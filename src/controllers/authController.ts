@@ -1,85 +1,40 @@
 import type { Request, Response } from "express";
-import bcrypt from 'bcrypt';
-import jwt from 'jsonwebtoken';
-import User from "../models/User";
+import { AuthService } from "../services/authService";
+import {
+    successResponse,
+    errorResponse,
+    createdResponse,
+    badRequestResponse
+} from "../utils/response";
+import { ValidationError, AuthenticationError } from "../utils/customErrors";
+
+const authService = new AuthService();
+
+const handleAuthError = (res: Response, error: any, defaultMsg: string) => {
+    if (error instanceof ValidationError) {
+        return badRequestResponse(res, error.message);
+    }
+    if (error instanceof AuthenticationError) {
+        return badRequestResponse(res, error.message); 
+    }
+    return errorResponse(res, defaultMsg, 500, error);
+};
 
 export async function register(req: Request, res: Response) {
     try {
-        const { name, email, password } = req.body as {
-            name: string;
-            email: string;
-            password: string;
-        };
-
-        if (!name || !email || !password) {
-            return res.status(400).json({message: "All fields are required"})
-        }
-
-        const existing = await User.findOne({email})
-
-        if (existing) {
-            return res.status(400).json({message: "Email already registered"})
-        }
-
-        const passwordHash  = await bcrypt.hash(password, 10);
-        const user          = await User.create({ name, email, passwordHash });
-        const token = jwt.sign(
-            { 
-                userId: String(user._id) 
-            },     
-            process.env.JWT_SECRET as string, 
-            { 
-                expiresIn: '7d' 
-            }
-        );
-
-        return res.status(201).json({ token, user: { id: String(user._id), name, email }})
-
+        const result = await authService.register(req.body);
+        return createdResponse(res, result, "User registered successfully");
     } catch (error) {
-        return res.status(500).json({message: 'Registration failed'})
+        return handleAuthError(res, error, "Registration failed");
     }
 }
 
-export async function login(req: Request, res: Response){
+export async function login(req: Request, res: Response) {
     try {
-        const { email, password } = req.body as {
-            email: string;
-            password: string;
-        }
-
-        if (!email || !password) {
-            return res.status(400).json({message: 'All fields are required'})
-        }
-
-        const user = await User.findOne({ email });
-
-        if (!user) {
-            return res.status(400).json({message: 'Invalid credentials'})
-        }
-
-        const ok = await bcrypt.compare(password, user.passwordHash);
-
-        if (!ok) {
-            return res.status(401).json({message: 'Invalid credentials'})
-        }
-
-        const token = jwt.sign(
-            { userId: String(user._id), name: user.name, email: user.email },
-            process.env.JWT_SECRET as string,
-            { expiresIn: '7d' }
-        )
-
-        return res.status(201).json({
-            token, 
-            user: { 
-                id: String(user._id),
-                name: user.name,
-                email: user.email 
-            }
-        });
-
+        const result = await authService.login(req.body);
+        return successResponse(res, result, "Login successful");
     } catch (error) {
-        return res.status(500).json({ message: 'Login failed' })
+        return handleAuthError(res, error, "Login failed");
     }
 }
 

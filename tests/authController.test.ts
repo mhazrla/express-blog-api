@@ -1,25 +1,20 @@
 /**
- * Unit tests for authController
+ * Updated unit tests for authController after refactor to AuthService + response wrappers
  */
 
-jest.mock('../src/models/User', () => ({
-  __esModule: true,
-  default: {
-    findOne: jest.fn(),
-    create: jest.fn()
-  }
-}));
+const registerMock = jest.fn();
+const loginMock = jest.fn();
 
-jest.mock('bcrypt', () => ({
-  hash: jest.fn(),
-  compare: jest.fn()
-}));
-
-jest.mock('jsonwebtoken', () => ({
-  sign: jest.fn()
+jest.mock('../src/services/authService', () => ({
+  AuthService: jest.fn().mockImplementation(() => ({
+    register: registerMock,
+    login: loginMock,
+  })),
 }));
 
 import { register, login } from '../src/controllers/authController';
+
+const { ValidationError, AuthenticationError } = require('../src/utils/customErrors');
 
 const mockResponse = () => {
   const res: any = {};
@@ -28,63 +23,50 @@ const mockResponse = () => {
   return res;
 };
 
-describe('authController - register', () => {
-  beforeEach(() => jest.clearAllMocks());
+describe('authController (refactored) - register', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
 
-  it('should return 400 when missing fields', async () => {
+  it('returns 400 when AuthService.register throws ValidationError', async () => {
+  registerMock.mockRejectedValue(new ValidationError('All fields are required'));
+
     const req: any = { body: {} };
     const res = mockResponse();
     await register(req, res);
+
     expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ message: 'All fields are required' }));
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
   });
 
-  it('should return 400 when email already registered', async () => {
-    const User = require('../src/models/User').default;
-    (User.findOne as jest.Mock).mockResolvedValue({ _id: 'existing' });
-
-    const req: any = { body: { name: 'a', email: 'a@a.com', password: 'p' } };
-    const res = mockResponse();
-    await register(req, res);
-    expect(User.findOne).toHaveBeenCalledWith({ email: 'a@a.com' });
-    expect(res.status).toHaveBeenCalledWith(400);
-  });
-
-  it('should create user and return token on success', async () => {
-    const User = require('../src/models/User').default;
-    (User.findOne as jest.Mock).mockResolvedValue(null);
-    (User.create as jest.Mock).mockResolvedValue({ _id: 'id', name: 'n', email: 'e' });
-
-    const bcrypt = require('bcrypt');
-    (bcrypt.hash as jest.Mock).mockResolvedValue('hashedpw');
-
-    const jwt = require('jsonwebtoken');
-    (jwt.sign as jest.Mock).mockReturnValue('TOKEN123');
+  it('returns 201 and created payload on success', async () => {
+  const payload = { token: 'TOKEN123', user: { id: 'id', name: 'n', email: 'e' } };
+  registerMock.mockResolvedValue(payload);
 
     const req: any = { body: { name: 'n', email: 'e', password: 'p' } };
     const res = mockResponse();
     await register(req, res);
 
-    expect(User.create).toHaveBeenCalled();
-    expect(jwt.sign).toHaveBeenCalled();
     expect(res.status).toHaveBeenCalledWith(201);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ token: 'TOKEN123' }));
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true, data: payload }));
   });
 });
 
-describe('authController - login', () => {
+describe('authController (refactored) - login', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('should return 400 when missing fields', async () => {
+  it('returns 400 when missing fields (ValidationError)', async () => {
+  loginMock.mockRejectedValue(new ValidationError('All fields are required'));
+
     const req: any = { body: {} };
     const res = mockResponse();
     await login(req, res);
+
     expect(res.status).toHaveBeenCalledWith(400);
   });
 
-  it('should return 400 when user not found', async () => {
-    const User = require('../src/models/User').default;
-    (User.findOne as jest.Mock).mockResolvedValue(null);
+  it('returns 400 when credentials invalid (AuthenticationError)', async () => {
+  loginMock.mockRejectedValue(new AuthenticationError());
 
     const req: any = { body: { email: 'x@x.com', password: 'p' } };
     const res = mockResponse();
@@ -92,35 +74,16 @@ describe('authController - login', () => {
     expect(res.status).toHaveBeenCalledWith(400);
   });
 
-  it('should return 401 when password invalid', async () => {
-    const User = require('../src/models/User').default;
-    (User.findOne as jest.Mock).mockResolvedValue({ _id: 'id', passwordHash: 'h' });
-
-    const bcrypt = require('bcrypt');
-    (bcrypt.compare as jest.Mock).mockResolvedValue(false);
-
-    const req: any = { body: { email: 'x@x.com', password: 'p' } };
-    const res = mockResponse();
-    await login(req, res);
-    expect(res.status).toHaveBeenCalledWith(401);
-  });
-
-  it('should return token and user on success', async () => {
-    const User = require('../src/models/User').default;
-    (User.findOne as jest.Mock).mockResolvedValue({ _id: 'id', name: 'n', email: 'e', passwordHash: 'h' });
-
-    const bcrypt = require('bcrypt');
-    (bcrypt.compare as jest.Mock).mockResolvedValue(true);
-
-    const jwt = require('jsonwebtoken');
-    (jwt.sign as jest.Mock).mockReturnValue('TOKEN_LOGIN');
+  it('returns 200 and token/user on success', async () => {
+  const payload = { token: 'TOKEN_LOGIN', user: { id: 'id', name: 'n', email: 'e' } };
+  loginMock.mockResolvedValue(payload);
 
     const req: any = { body: { email: 'e', password: 'p' } };
     const res = mockResponse();
     await login(req, res);
 
-    expect(jwt.sign).toHaveBeenCalled();
-    expect(res.status).toHaveBeenCalledWith(201);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ token: 'TOKEN_LOGIN' }));
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true, data: payload }));
   });
 });
+
